@@ -1,0 +1,118 @@
+name: build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Compila UxPlay y arma la carpeta autocontenida del motor.
+  # Es el trabajo mas fragil: depende de MSYS2 y de GStreamer, asi que corre
+  # separado para que un fallo acá se distinga de un fallo de la app.
+  engine:
+    name: Motor (UxPlay + GStreamer)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: 'msys2 {0}'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # El shell por defecto de este job es msys2, que aun no existe en este paso.
+        with:
+          fetch-depth: 1
+
+      - name: Preparar MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          # git es un paquete MSYS (sin prefijo mingw); el resto lo instala
+          # build-engine.sh a partir de engine/packages.txt.
+          install: git
+
+      - name: Compilar UxPlay
+        run: ./engine/build-engine.sh
+
+      - name: Empaquetar motor autocontenido
+        run: ./engine/bundle.sh
+
+      - name: Verificar que el motor arranca
+        # uxplay -h no abre puertos ni necesita red: valida que el .exe y todas
+        # las DLLs empaquetadas cargan. No se mira el codigo de salida (algunas
+        # versiones devuelven != 0 al imprimir la ayuda) sino que haya salido
+        # texto: si faltara una DLL, Windows mata el proceso sin imprimir nada.
+        run: |
+          cd out/engine
+          output="$(./uxplay.exe -h 2>&1 || true)"
+          if [[ -z "${output}" ]]; then
+            echo "ERROR: uxplay.exe no produjo salida; probablemente falte una DLL." >&2
+            exit 1
+          fi
+          echo "El motor carga correctamente ($(wc -l <<< "${output}") lineas de ayuda)."
+
+      - name: Publicar artefacto del motor
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine
+          path: out/engine/
+          retention-days: 14
+
+  app:
+    name: App (.NET)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Tests
+        run: dotnet test tests/AirPlayReceiver.Tests/AirPlayReceiver.Tests.csproj -c Release
+
+      - name: Publicar app
+        run: dotnet publish src/AirPlayReceiver.App/AirPlayReceiver.App.csproj -c Release -o out/app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: out/app/
+          retention-days: 14
+
+  package:
+    name: Paquete portable
+    runs-on: windows-latest
+    needs: [engine, app]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: app
+          path: package
+
+      # El motor va en la subcarpeta 'engine' porque es donde lo busca
+      # EnginePaths por defecto (junto al ejecutable de la app).
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine
+          path: package/engine
+
+      - name: Incluir licencia y configuración de ejemplo
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE package/
+          Copy-Item docs/config.ejemplo.json package/
+          Copy-Item docs/DESPLIEGUE.md package/
+
+      - name: Comprimir
+        shell: pwsh
+        run: Compress-Archive -Path package/* -DestinationPath ReceptorAirPlay-portable.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReceptorAirPlay-portable
+          path: ReceptorAirPlay-portable.zip
+          retention-days: 30

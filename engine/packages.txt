@@ -1,0 +1,18 @@
+# Paquetes MSYS2 necesarios para compilar y empaquetar UxPlay.
+# El prefijo (mingw-w64-ucrt-x86_64- / mingw-w64-clang-aarch64-) lo agrega
+# build-engine.sh segun el MSYSTEM activo.
+#
+# Toolchain
+cmake
+gcc
+ninja
+pkgconf
+# Dependencias de UxPlay
+libplist
+openssl
+# GStreamer: base + los plugins que necesita el pipeline de mirroring
+gstreamer
+gst-plugins-base
+gst-plugins-good
+gst-plugins-bad
+gst-libav

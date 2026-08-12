@@ -1,0 +1,11 @@
+{
+  "nameTemplate": "Aula {aula}",
+  "hostnamePattern": "^PC-AULA-(?<aula>\\d+)$",
+  "fallbackNameTemplate": "{COMPUTERNAME}",
+  "appendHostname": false,
+  "videoSink": "d3d11videosink",
+  "audioSink": "wasapisink",
+  "fullscreen": false,
+  "startEngineOnLaunch": true,
+  "extraArguments": []
+}

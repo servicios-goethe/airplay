@@ -1,0 +1,18 @@
+# Build output
+out/
+bin/
+obj/
+*.user
+
+# Engine build workspace (UxPlay checkout + cmake tree)
+engine/work/
+
+# Packaging
+*.zip
+*.msi
+*.wixpdb
+
+# Editors
+.vs/
+.vscode/
+.idea/
