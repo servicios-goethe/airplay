@@ -56,36 +56,58 @@ else
 fi
 
 # --- Cierre transitivo de DLLs --------------------------------------------
-# ldd resuelve solo las dependencias directas de cada binario. Los plugins
-# tienen las suyas propias (libav, codecs, etc.), asi que se itera hasta que
-# una pasada completa no agregue ninguna DLL nueva.
+# Se inspecciona la tabla de imports con objdump en vez de usar ldd: ldd es un
+# script que ejecuta el binario y en MSYS2 cuesta del orden de 100 ms por
+# llamada, lo que con ~300 plugins hace que el cierre transitivo tarde decenas
+# de minutos.
+#
+# Ademas cada binario se inspecciona UNA sola vez, con una lista de trabajo:
+# repasar todo el directorio en cada pasada era cuadratico sin necesidad.
 echo "==> Resolviendo dependencias DLL"
-pass=0
-while :; do
-  pass=$((pass + 1))
-  added=0
 
-  while IFS= read -r binary; do
-    # ldd falla en binarios que no puede leer; no debe cortar el script.
-    while IFS= read -r dep; do
-      [[ -z "${dep}" ]] && continue
-      name="$(basename "${dep}")"
-      if [[ ! -f "${OUT_DIR}/${name}" ]]; then
-        cp -f "${dep}" "${OUT_DIR}/${name}"
-        added=$((added + 1))
-      fi
-    done < <(ldd "${binary}" 2>/dev/null \
-             | awk '{print $3}' \
-             | grep -i "^${PREFIX}/bin/" || true)
-  done < <(find "${OUT_DIR}" -name '*.exe' -o -name '*.dll')
+declare -A seen=()
+queue=()
 
-  echo "    pasada ${pass}: ${added} DLL nuevas"
-  [[ "${added}" -eq 0 ]] && break
-  if [[ "${pass}" -ge 20 ]]; then
-    echo "ERROR: el cierre de dependencias no converge." >&2
-    exit 1
-  fi
+enqueue() {
+  local path="$1"
+  local key
+  key="$(basename "${path}" | tr '[:upper:]' '[:lower:]')"
+  [[ -n "${seen[${key}]:-}" ]] && return 0
+  seen["${key}"]=1
+  queue+=("${path}")
+}
+
+while IFS= read -r binary; do
+  enqueue "${binary}"
+done < <(find "${OUT_DIR}" \( -name '*.exe' -o -name '*.dll' \))
+
+echo "    ${#queue[@]} binarios iniciales a inspeccionar"
+
+copied=0
+index=0
+while (( index < ${#queue[@]} )); do
+  binary="${queue[index]}"
+  index=$((index + 1))
+
+  while IFS= read -r dep; do
+    [[ -z "${dep}" ]] && continue
+    key="$(tr '[:upper:]' '[:lower:]' <<< "${dep}")"
+    [[ -n "${seen[${key}]:-}" ]] && continue
+
+    src="${PREFIX}/bin/${dep}"
+    if [[ -f "${src}" ]]; then
+      cp -f "${src}" "${OUT_DIR}/${dep}"
+      copied=$((copied + 1))
+      enqueue "${OUT_DIR}/${dep}"
+    else
+      # DLL del sistema (kernel32, user32, ...): la aporta Windows, no se
+      # empaqueta. Se marca igual para no volver a buscarla.
+      seen["${key}"]=1
+    fi
+  done < <(objdump -p "${binary}" 2>/dev/null | awk '/DLL Name:/ {print $3}')
 done
+
+echo "    ${index} binarios inspeccionados, ${copied} DLLs copiadas"
 
 dll_count=$(find "${OUT_DIR}" -maxdepth 1 -name '*.dll' | wc -l)
 echo "==> ${dll_count} DLLs empaquetadas"
